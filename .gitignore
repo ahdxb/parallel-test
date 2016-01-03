@@ -1,0 +1,10 @@
+.Rproj.user
+.Rhistory
+.RData
+*.RData
+*.rdb
+*.rdx
+
+.Rapp.history
+
+*.Rproj

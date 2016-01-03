@@ -1,0 +1,138 @@
+---
+title:  "Testing parallel in R"
+date:   "October 2015"
+output: 
+    html_document:
+        fig_width:  15
+        fig_height: 4
+---
+
+```{r libs_and_global_options, include = FALSE}
+library(knitr)
+opts_chunk$set(results="hold", warning=FALSE, message=FALSE, cache=TRUE) ## change to FALSE to re-eval whole doc
+library(dplyr); library(magrittr); library(ggplot2)
+library(parallel)
+library(numbers)  # for the isPrime function
+```
+
+This note has two purposes:
+
+- to test R's `parallel` package's performance on a basic multicore machine
+- to test a wrapper function around `base::lapply` and `parallel::parLapply`
+
+### 1. Definition of varLapply
+
+My objective for `varLapply` is to be a no-hassle wrapper around `lapply` and `parLapply`, with a syntax similar to `lapply` and a simple boolean `use_parallel` argument that could be switched on or off algorithmically.
+
+```{r varLapply_definition}
+varLapply <- function(X, FUN,               # same syntax as base::lapply
+                      use_parallel = TRUE,  # use parLapply by default
+                      number_of_nodes = detectCores()-1,  # keep 1 core free by default
+                      par_apply_function = "parLapply",   # allows to switch to mclapply
+                      ...) {
+    if (!use_parallel | number_of_nodes < 0) {
+        lapply(X, FUN, ...)
+    } else {
+        require(parallel)
+        if (par_apply_function == "parLapply") {
+            tmp_cluster <- makeForkCluster(nnodes = max(number_of_nodes,1))
+            clusterExport(cl = tmp_cluster, varlist = c(), envir = parent.frame())
+            output <- parLapply(cl = tmp_cluster, X = X, fun = FUN, ...)
+            stopCluster(tmp_cluster)
+            return(output)
+        } else if (par_apply_function == "mclapply") {
+            mclapply(X = X, FUN = FUN, mc.cores = number_of_nodes)
+        }
+    }
+}
+```
+
+The purpose of `clusterExport(... envir = parent.frame())` is to import all variables/functions/objects from `varLapply`'s parent. There are probably more subtle ways of doing this, but it has worked so far.
+
+### 2. Test 1: isPrime
+
+```{r prime_test_definition`}
+library(dplyr); library(magrittr); library(ggplot2)
+library(parallel)
+library(numbers)  # for the isPrime function
+
+prime_test <- function(N,   # a vector, the integers we test for primality
+                       K,   # a vector, the lengths of the [l/parL/mcl]apply loops
+                       C,   # a vector, the numbers of cores for the varLapply loops
+                       P) { # an integer, the number of times each test is repeated for averaging
+    N.l <- length(N)
+    K.l <- length(K)
+    C.l <- length(C)
+    S.l <- N.l * K.l * C.l * P
+    tests <- data.frame(matrix(NA, nrow = S.l, ncol = 5))
+    colnames(tests) <- c("n", # the integer tested for primality
+                         "k", # the number of times n is tested
+                         "c", # the number of cores
+                         "p", # the number of times each test is repeated
+                         "time") # the measured test time (elapsed in system.time)
+    i <- 1
+    for (n in 1:N.l) {
+        for (k in 1:K.l) {
+            for (c in 1:C.l) {
+                for (p in 1:P) {
+                    tests[i,] <- c(N[n], K[k], C[c], p, 0.0)
+                    i <- i+1
+    }}}}
+    # each row of tests corresponds to a test unit where we run
+    # isPrime(n) k times using varLapply(..., number_of_nodes = c);
+    # output of system.time (elapsed) is stored in the time column;
+    # each case is repeated P times for averaging;
+    # we sample test units in random order to reduce bias potential
+    for (j in sample(1:S.l)) { 
+        tests[j,"time"] <- system.time(varLapply(X = rep(tests[j,"n"], tests[j,"k"]),
+                                                 FUN = isPrime,
+                                                 number_of_nodes = tests[j,"c"], 
+                                                 par_apply_function = "mclapply")
+                                       )[3]
+        gc()
+    }
+    return(tests)
+}
+```
+
+```{r run_test_1, cache=FALSE}
+set.seed(123456)
+rdm_primes <- Primes(10^2,10^9) %>% sample(size = 250)
+loop_sizes <- c(10,25,100,250,1000,2500)
+core_nbers <- c(-1,1,3,5,7)
+test_3     <- prime_test(N = rdm_primes, K = loop_sizes, C = core_nbers, P = 5)
+save(test_3, file = "./test_3.Rdata")
+```
+
+
+
+
+
+
+
+
+---
+
+Links that I have found useful:
+
+- http://stackoverflow.com/questions/12019638/using-parallels-parlapply-unable-to-access-variables-within-parallel-code
+- https://trinkerrstuff.wordpress.com/2012/08/19/parallelization-speed-up-functions-in-a-package/
+- https://stat.ethz.ch/R-manual/R-devel/library/parallel/doc/parallel.pdf
+- http://journal.r-project.org/archive/2012-2/RJournal_2012-2_Baaaath.pdf
+
+Links that look useful and I still need to read:
+- http://blog.dominodatalab.com/simple-parallelization/
+
+---
+
+R version:
+```{r, echo=FALSE}
+version[c("platform", "os", "version.string")]
+```
+
+```{r}
+detectCores()
+```
+
+*Author: Alexandre Halm*  
+*Edited with [RStudio](http://www.rstudio.com/products/RStudio/#Desk)*  
